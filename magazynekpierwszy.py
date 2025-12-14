@@ -1,51 +1,86 @@
 import streamlit as st
 
-st.title("📦 Prosty Magazyn")
+st.title("📦 Magazyn z Ilościami")
 
-# --- MECHANIZM PAMIĘCI (BEZ PLIKÓW I BEZ SESSION_STATE) ---
-# Używamy cache_resource, aby stworzyć jedną listę w pamięci RAM.
-# Uwaga: Ta lista będzie wspólna dla wszystkich osób otwierających stronę!
+# --- GLOBALNA PAMIĘĆ SERWERA (SŁOWNIK) ---
+# Używamy cache_resource, aby przechować słownik {nazwa_produktu: ilosc_sztuk}
+# Dane są wspólne dla wszystkich użytkowników i znikają po restarcie serwera.
 @st.cache_resource
 def dane_magazynu():
-    return []
+    return {}
 
-# Pobieramy referencję do listy (to działa jak żywa zmienna globalna)
 magazyn = dane_magazynu()
 
-# --- DODAWANIE TOWARU ---
+# --- SEKCJA: DODAWANIE TOWARU ---
 st.header("Dodaj towar")
-col1, col2 = st.columns([3, 1])
 
-with col1:
-    # Formularz ułatwia obsługę entera
-    with st.form("dodaj_form"):
+with st.form("dodaj_form"):
+    col1, col2 = st.columns([3, 1])
+    with col1:
         nowa_nazwa = st.text_input("Nazwa produktu")
-        przycisk_dodaj = st.form_submit_button("Dodaj")
+    with col2:
+        # step=1 zapewnia liczby całkowite, min_value=1 blokuje ujemne/zero
+        ilosc_dodawana = st.number_input("Ilość sztuk", min_value=1, value=1, step=1)
+    
+    przycisk_dodaj = st.form_submit_button("Przyjmij do magazynu")
 
-    if przycisk_dodaj and nowa_nazwa:
-        magazyn.append(nowa_nazwa)
-        st.success(f"Dodano: {nowa_nazwa}")
-        st.rerun() # Odświeżamy, aby pokazać zmiany na liście poniżej
+if przycisk_dodaj and nowa_nazwa:
+    # Logika: Jeśli produkt jest, dodajemy ilość. Jeśli nie ma, tworzymy nowy wpis.
+    if nowa_nazwa in magazyn:
+        magazyn[nowa_nazwa] += ilosc_dodawana
+    else:
+        magazyn[nowa_nazwa] = ilosc_dodawana
+    
+    st.success(f"Zaktualizowano: {nowa_nazwa} (Dodano: {ilosc_dodawana} szt.)")
+    st.rerun()
 
-# --- USUWANIE TOWARU ---
+# --- SEKCJA: USUWANIE TOWARU ---
 st.divider()
-st.header("Usuń towar")
+st.header("Wydaj / Usuń towar")
 
 if magazyn:
-    # Wybieramy z listy rozwijanej, co usunąć
-    do_usuniecia = st.selectbox("Wybierz produkt do usunięcia", magazyn)
+    # Wybór produktu z listy kluczy słownika
+    produkt_do_edycji = st.selectbox("Wybierz produkt", list(magazyn.keys()))
     
-    if st.button("Usuń wybrany"):
-        magazyn.remove(do_usuniecia)
-        st.warning(f"Usunięto: {do_usuniecia}")
-        st.rerun() # Odświeżamy stronę
+    # Pobieramy aktualną ilość, aby ograniczyć pole usuwania
+    dostepna_ilosc = magazyn[produkt_do_edycji]
+    
+    col_u1, col_u2 = st.columns([2, 1])
+    with col_u1:
+        ilosc_do_usuniecia = st.number_input(
+            f"Ile sztuk usunąć? (Dostępne: {dostepna_ilosc})", 
+            min_value=1, 
+            max_value=dostepna_ilosc, 
+            step=1
+        )
+    with col_u2:
+        # Pusty kontener dla wyrównania przycisku w dół
+        st.write("") 
+        st.write("")
+        if st.button("Wydaj z magazynu"):
+            magazyn[produkt_do_edycji] -= ilosc_do_usuniecia
+            
+            st.warning(f"Wydano {ilosc_do_usuniecia} szt. produktu {produkt_do_edycji}")
+            
+            # Jeśli ilość spadła do 0, usuwamy produkt całkowicie z listy
+            if magazyn[produkt_do_edycji] <= 0:
+                del magazyn[produkt_do_edycji]
+                
+            st.rerun()
 else:
-    st.info("Magazyn jest pusty.")
+    st.info("Brak towarów do wydania.")
 
-# --- WYŚWIETLANIE LISTY ---
+# --- SEKCJA: STAN MAGAZYNU (TABELA) ---
 st.divider()
-st.subheader(f"Aktualny stan (Liczba produktów: {len(magazyn)})")
+st.subheader("📊 Aktualny stan magazynu")
 
-# Wyświetlamy prostą listę wypunktowaną
-for produkt in magazyn:
-    st.text(f"- {produkt}")
+if magazyn:
+    # Wyświetlamy jako prostą tabelę
+    # Zamieniamy słownik na format czytelny dla st.dataframe (lista słowników)
+    dane_do_tabeli = [
+        {"Produkt": towar, "Ilość sztuk": ilosc} 
+        for towar, ilosc in magazyn.items()
+    ]
+    st.dataframe(dane_do_tabeli, use_container_width=True)
+else:
+    st.text("Magazyn jest pusty.")

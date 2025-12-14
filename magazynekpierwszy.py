@@ -1,86 +1,108 @@
 import streamlit as st
 
-st.title("📦 Magazyn z Ilościami")
+st.set_page_config(page_title="Magazyn Wyrobów Gotowych", page_icon="🏭")
+st.title("🏭 Magazyn Wyrobów Gotowych")
 
-# --- GLOBALNA PAMIĘĆ SERWERA (SŁOWNIK) ---
-# Używamy cache_resource, aby przechować słownik {nazwa_produktu: ilosc_sztuk}
-# Dane są wspólne dla wszystkich użytkowników i znikają po restarcie serwera.
+# --- GLOBALNA PAMIĘĆ SERWERA ---
+# Przechowujemy słownik z dwoma kluczami: 'stany' (produkty) i 'finanse' (pieniądze)
 @st.cache_resource
-def dane_magazynu():
-    return {}
+def globalny_stan():
+    return {
+        "magazyn": {},      # Format: {'Nazwa': ilosc_sztuk}
+        "bilans": 0.0       # Startujemy od zera
+    }
 
-magazyn = dane_magazynu()
+state = globalny_stan()
 
-# --- SEKCJA: DODAWANIE TOWARU ---
-st.header("Dodaj towar")
+# --- WYŚWIETLANIE BILANSU ---
+# Wyświetlamy to na górze, aby od razu widzieć wynik finansowy
+st.divider()
+col_bilans1, col_bilans2 = st.columns([3, 1])
+with col_bilans1:
+    st.subheader("Aktualny Bilans Finansowy")
+with col_bilans2:
+    # Kolorowanie wyniku: zielony jeśli na plusie, czerwony jeśli na minusie
+    st.metric(label="Zysk / Strata", value=f"{state['bilans']:.2f} PLN")
+st.divider()
+
+# --- SEKCJA: PRZYJĘCIE (ZAKUP/PRODUKCJA) ---
+st.header("➕ Przyjęcie towaru (Koszt)")
+st.caption("Dodanie towaru spowoduje odjęcie kwoty zakupu od bilansu.")
 
 with st.form("dodaj_form"):
-    col1, col2 = st.columns([3, 1])
+    col1, col2, col3 = st.columns([2, 1, 1])
     with col1:
-        nowa_nazwa = st.text_input("Nazwa produktu")
+        nowa_nazwa = st.text_input("Nazwa wyrobu")
     with col2:
-        # step=1 zapewnia liczby całkowite, min_value=1 blokuje ujemne/zero
-        ilosc_dodawana = st.number_input("Ilość sztuk", min_value=1, value=1, step=1)
+        ilosc_dodawana = st.number_input("Ilość (szt)", min_value=1, value=1, step=1)
+    with col3:
+        cena_zakupu = st.number_input("Cena zakupu/szt (PLN)", min_value=0.0, value=0.0, step=0.01, format="%.2f")
     
-    przycisk_dodaj = st.form_submit_button("Przyjmij do magazynu")
+    przycisk_dodaj = st.form_submit_button("Przyjmij na magazyn")
 
 if przycisk_dodaj and nowa_nazwa:
-    # Logika: Jeśli produkt jest, dodajemy ilość. Jeśli nie ma, tworzymy nowy wpis.
-    if nowa_nazwa in magazyn:
-        magazyn[nowa_nazwa] += ilosc_dodawana
-    else:
-        magazyn[nowa_nazwa] = ilosc_dodawana
+    koszt_calkowity = ilosc_dodawana * cena_zakupu
     
-    st.success(f"Zaktualizowano: {nowa_nazwa} (Dodano: {ilosc_dodawana} szt.)")
+    # 1. Aktualizacja stanu magazynowego
+    if nowa_nazwa in state["magazyn"]:
+        state["magazyn"][nowa_nazwa] += ilosc_dodawana
+    else:
+        state["magazyn"][nowa_nazwa] = ilosc_dodawana
+    
+    # 2. Aktualizacja finansów (Wydajemy pieniądze -> Bilans maleje)
+    state["bilans"] -= koszt_calkowity
+    
+    st.success(f"Przyjęto: {nowa_nazwa} ({ilosc_dodawana} szt.). Koszt: -{koszt_calkowity:.2f} PLN")
     st.rerun()
 
-# --- SEKCJA: USUWANIE TOWARU ---
-st.divider()
-st.header("Wydaj / Usuń towar")
+# --- SEKCJA: WYDANIE (SPRZEDAŻ) ---
+st.header("➖ Wydanie towaru (Sprzedaż)")
+st.caption("Wydanie towaru spowoduje dodanie kwoty sprzedaży do bilansu.")
 
-if magazyn:
-    # Wybór produktu z listy kluczy słownika
-    produkt_do_edycji = st.selectbox("Wybierz produkt", list(magazyn.keys()))
+if state["magazyn"]:
+    # Wybór produktu
+    produkt_do_edycji = st.selectbox("Wybierz wyrób do sprzedaży", list(state["magazyn"].keys()))
+    dostepna_ilosc = state["magazyn"][produkt_do_edycji]
     
-    # Pobieramy aktualną ilość, aby ograniczyć pole usuwania
-    dostepna_ilosc = magazyn[produkt_do_edycji]
-    
-    col_u1, col_u2 = st.columns([2, 1])
-    with col_u1:
-        ilosc_do_usuniecia = st.number_input(
-            f"Ile sztuk usunąć? (Dostępne: {dostepna_ilosc})", 
-            min_value=1, 
-            max_value=dostepna_ilosc, 
-            step=1
-        )
-    with col_u2:
-        # Pusty kontener dla wyrównania przycisku w dół
-        st.write("") 
-        st.write("")
-        if st.button("Wydaj z magazynu"):
-            magazyn[produkt_do_edycji] -= ilosc_do_usuniecia
+    with st.form("sprzedaj_form"):
+        col_u1, col_u2 = st.columns(2)
+        with col_u1:
+            ilosc_do_sprzedazy = st.number_input(
+                f"Ilość do sprzedania (Max: {dostepna_ilosc})", 
+                min_value=1, 
+                max_value=dostepna_ilosc, 
+                step=1
+            )
+        with col_u2:
+            cena_sprzedazy = st.number_input("Cena sprzedaży/szt (PLN)", min_value=0.0, value=0.0, step=0.01, format="%.2f")
             
-            st.warning(f"Wydano {ilosc_do_usuniecia} szt. produktu {produkt_do_edycji}")
+        btn_sprzedaj = st.form_submit_button("Sprzedaj i wydaj z magazynu")
+
+        if btn_sprzedaj:
+            przychod = ilosc_do_sprzedazy * cena_sprzedazy
             
-            # Jeśli ilość spadła do 0, usuwamy produkt całkowicie z listy
-            if magazyn[produkt_do_edycji] <= 0:
-                del magazyn[produkt_do_edycji]
-                
+            # 1. Aktualizacja stanu magazynowego
+            state["magazyn"][produkt_do_edycji] -= ilosc_do_sprzedazy
+            if state["magazyn"][produkt_do_edycji] <= 0:
+                del state["magazyn"][produkt_do_edycji]
+            
+            # 2. Aktualizacja finansów (Zarabiamy pieniądze -> Bilans rośnie)
+            state["bilans"] += przychod
+            
+            st.success(f"Sprzedano: {ilosc_do_sprzedazy} szt. {produkt_do_edycji}. Przychód: +{przychod:.2f} PLN")
             st.rerun()
 else:
-    st.info("Brak towarów do wydania.")
+    st.info("Magazyn jest pusty. Brak towarów do sprzedaży.")
 
-# --- SEKCJA: STAN MAGAZYNU (TABELA) ---
+# --- SEKCJA: TABELA STANÓW ---
 st.divider()
-st.subheader("📊 Aktualny stan magazynu")
+st.subheader("📦 Aktualne stany magazynowe")
 
-if magazyn:
-    # Wyświetlamy jako prostą tabelę
-    # Zamieniamy słownik na format czytelny dla st.dataframe (lista słowników)
+if state["magazyn"]:
     dane_do_tabeli = [
-        {"Produkt": towar, "Ilość sztuk": ilosc} 
-        for towar, ilosc in magazyn.items()
+        {"Nazwa Wyrobu": k, "Ilość na stanie": v} 
+        for k, v in state["magazyn"].items()
     ]
     st.dataframe(dane_do_tabeli, use_container_width=True)
 else:
-    st.text("Magazyn jest pusty.")
+    st.text("Brak wyrobów na stanie.")

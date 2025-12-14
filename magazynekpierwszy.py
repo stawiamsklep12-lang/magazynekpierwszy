@@ -2,32 +2,41 @@ import streamlit as st
 
 st.set_page_config(page_title="Magazyn Wyrobów Gotowych", page_icon="🏭")
 st.title("🏭 Magazyn Wyrobów Gotowych")
+st.caption("Auto-kalkulacja: Marża 25% | VAT 8%")
+
+# --- KONFIGURACJA STAŁYCH ---
+MARZA_PROCENT = 0.25  # 25% narzutu
+VAT_PROCENT = 0.08    # 8% VAT
 
 # --- GLOBALNA PAMIĘĆ SERWERA ---
-# Przechowujemy słownik z dwoma kluczami: 'stany' (produkty) i 'finanse' (pieniądze)
+# Struktura magazynu:
+# {
+#   "Nazwa Produktu": {
+#       "ilosc": 10, 
+#       "srednia_cena_zakupu": 50.00
+#   }
+# }
 @st.cache_resource
 def globalny_stan():
     return {
-        "magazyn": {},      # Format: {'Nazwa': ilosc_sztuk}
-        "bilans": 0.0       # Startujemy od zera
+        "magazyn": {},
+        "bilans": 0.0
     }
 
 state = globalny_stan()
 
 # --- WYŚWIETLANIE BILANSU ---
-# Wyświetlamy to na górze, aby od razu widzieć wynik finansowy
 st.divider()
 col_bilans1, col_bilans2 = st.columns([3, 1])
 with col_bilans1:
     st.subheader("Aktualny Bilans Finansowy")
 with col_bilans2:
-    # Kolorowanie wyniku: zielony jeśli na plusie, czerwony jeśli na minusie
-    st.metric(label="Zysk / Strata", value=f"{state['bilans']:.2f} PLN")
+    color = "green" if state['bilans'] >= 0 else "red"
+    st.markdown(f"<h2 style='color:{color};'>{state['bilans']:.2f} PLN</h2>", unsafe_allow_html=True)
 st.divider()
 
 # --- SEKCJA: PRZYJĘCIE (ZAKUP/PRODUKCJA) ---
 st.header("➕ Przyjęcie towaru (Koszt)")
-st.caption("Dodanie towaru spowoduje odjęcie kwoty zakupu od bilansu.")
 
 with st.form("dodaj_form"):
     col1, col2, col3 = st.columns([2, 1, 1])
@@ -36,33 +45,61 @@ with st.form("dodaj_form"):
     with col2:
         ilosc_dodawana = st.number_input("Ilość (szt)", min_value=1, value=1, step=1)
     with col3:
-        cena_zakupu = st.number_input("Cena zakupu/szt (PLN)", min_value=0.0, value=0.0, step=0.01, format="%.2f")
+        cena_zakupu = st.number_input("Cena zakupu netto/szt", min_value=0.0, value=0.0, step=0.01, format="%.2f")
     
     przycisk_dodaj = st.form_submit_button("Przyjmij na magazyn")
 
 if przycisk_dodaj and nowa_nazwa:
-    koszt_calkowity = ilosc_dodawana * cena_zakupu
+    koszt_transakcji = ilosc_dodawana * cena_zakupu
     
-    # 1. Aktualizacja stanu magazynowego
+    # Logika średniej ceny ważonej (jeśli towar już istnieje)
     if nowa_nazwa in state["magazyn"]:
-        state["magazyn"][nowa_nazwa] += ilosc_dodawana
+        stare_dane = state["magazyn"][nowa_nazwa]
+        stara_ilosc = stare_dane["ilosc"]
+        stara_cena = stare_dane["srednia_cena_zakupu"]
+        
+        nowa_ilosc_calkowita = stara_ilosc + ilosc_dodawana
+        # Wzór na nową średnią cenę: ((stara_ilosc * stara_cena) + (nowa_ilosc * nowa_cena)) / suma_ilosci
+        nowa_srednia_cena = ((stara_ilosc * stara_cena) + koszt_transakcji) / nowa_ilosc_calkowita
+        
+        state["magazyn"][nowa_nazwa]["ilosc"] = nowa_ilosc_calkowita
+        state["magazyn"][nowa_nazwa]["srednia_cena_zakupu"] = nowa_srednia_cena
     else:
-        state["magazyn"][nowa_nazwa] = ilosc_dodawana
+        # Nowy towar
+        state["magazyn"][nowa_nazwa] = {
+            "ilosc": ilosc_dodawana,
+            "srednia_cena_zakupu": cena_zakupu
+        }
     
-    # 2. Aktualizacja finansów (Wydajemy pieniądze -> Bilans maleje)
-    state["bilans"] -= koszt_calkowity
+    # Aktualizacja bilansu (odejmujemy koszt zakupu)
+    state["bilans"] -= koszt_transakcji
     
-    st.success(f"Przyjęto: {nowa_nazwa} ({ilosc_dodawana} szt.). Koszt: -{koszt_calkowity:.2f} PLN")
+    st.success(f"Przyjęto: {nowa_nazwa}. Koszt operacji: -{koszt_transakcji:.2f} PLN")
     st.rerun()
 
-# --- SEKCJA: WYDANIE (SPRZEDAŻ) ---
+# --- SEKCJA: WYDANIE (SPRZEDAŻ Z AUTOMATYCZNĄ WYCENĄ) ---
 st.header("➖ Wydanie towaru (Sprzedaż)")
-st.caption("Wydanie towaru spowoduje dodanie kwoty sprzedaży do bilansu.")
 
 if state["magazyn"]:
-    # Wybór produktu
     produkt_do_edycji = st.selectbox("Wybierz wyrób do sprzedaży", list(state["magazyn"].keys()))
-    dostepna_ilosc = state["magazyn"][produkt_do_edycji]
+    
+    # Pobieramy dane o produkcie
+    dane_produktu = state["magazyn"][produkt_do_edycji]
+    dostepna_ilosc = dane_produktu["ilosc"]
+    koszt_zakupu_jednostkowy = dane_produktu["srednia_cena_zakupu"]
+    
+    # --- KALKULACJA CEN ---
+    # 1. Cena z narzutem (Netto) = Koszt zakupu * (1 + 25%)
+    cena_sprzedazy_netto = koszt_zakupu_jednostkowy * (1 + MARZA_PROCENT)
+    # 2. Cena z VAT (Brutto) = Cena Netto * (1 + 8%)
+    cena_sprzedazy_brutto = cena_sprzedazy_netto * (1 + VAT_PROCENT)
+    
+    st.info(f"""
+    📦 **Kalkulacja dla: {produkt_do_edycji}**
+    * Średnia cena zakupu: {koszt_zakupu_jednostkowy:.2f} PLN
+    * + Marża {int(MARZA_PROCENT*100)}% (Netto): **{cena_sprzedazy_netto:.2f} PLN**
+    * + VAT {int(VAT_PROCENT*100)}% (Brutto): **{cena_sprzedazy_brutto:.2f} PLN**
+    """)
     
     with st.form("sprzedaj_form"):
         col_u1, col_u2 = st.columns(2)
@@ -74,35 +111,48 @@ if state["magazyn"]:
                 step=1
             )
         with col_u2:
-            cena_sprzedazy = st.number_input("Cena sprzedaży/szt (PLN)", min_value=0.0, value=0.0, step=0.01, format="%.2f")
+            # Wyświetlamy cenę brutto, ale jako "disabled" (zablokowaną), żeby użytkownik widział, ale nie zmieniał ręcznie
+            st.text_input("Cena sprzedaży (Brutto/szt)", value=f"{cena_sprzedazy_brutto:.2f} PLN", disabled=True)
             
-        btn_sprzedaj = st.form_submit_button("Sprzedaj i wydaj z magazynu")
+        btn_sprzedaj = st.form_submit_button(f"Sprzedaj po cenie {cena_sprzedazy_brutto:.2f} PLN")
 
         if btn_sprzedaj:
-            przychod = ilosc_do_sprzedazy * cena_sprzedazy
+            # Do bilansu dodajemy kwotę Brutto (to co płaci klient)
+            przychod_calkowity = ilosc_do_sprzedazy * cena_sprzedazy_brutto
             
             # 1. Aktualizacja stanu magazynowego
-            state["magazyn"][produkt_do_edycji] -= ilosc_do_sprzedazy
-            if state["magazyn"][produkt_do_edycji] <= 0:
+            state["magazyn"][produkt_do_edycji]["ilosc"] -= ilosc_do_sprzedazy
+            
+            # Jeśli ilość spadła do 0, usuwamy produkt z listy
+            if state["magazyn"][produkt_do_edycji]["ilosc"] <= 0:
                 del state["magazyn"][produkt_do_edycji]
             
-            # 2. Aktualizacja finansów (Zarabiamy pieniądze -> Bilans rośnie)
-            state["bilans"] += przychod
+            # 2. Aktualizacja finansów (Dodajemy przychód do bilansu)
+            state["bilans"] += przychod_calkowity
             
-            st.success(f"Sprzedano: {ilosc_do_sprzedazy} szt. {produkt_do_edycji}. Przychód: +{przychod:.2f} PLN")
+            st.success(f"Sprzedano {ilosc_do_sprzedazy} szt. Przychód do kasy: +{przychod_calkowity:.2f} PLN")
             st.rerun()
 else:
-    st.info("Magazyn jest pusty. Brak towarów do sprzedaży.")
+    st.info("Magazyn jest pusty.")
 
 # --- SEKCJA: TABELA STANÓW ---
 st.divider()
 st.subheader("📦 Aktualne stany magazynowe")
 
 if state["magazyn"]:
-    dane_do_tabeli = [
-        {"Nazwa Wyrobu": k, "Ilość na stanie": v} 
-        for k, v in state["magazyn"].items()
-    ]
+    # Przekształcamy zagnieżdżony słownik na płaską listę do tabeli
+    dane_do_tabeli = []
+    for nazwa, info in state["magazyn"].items():
+        cena_n = info['srednia_cena_zakupu'] * (1 + MARZA_PROCENT)
+        cena_b = cena_n * (1 + VAT_PROCENT)
+        
+        dane_do_tabeli.append({
+            "Nazwa Wyrobu": nazwa,
+            "Ilość": info['ilosc'],
+            "Śr. Cena Zakupu": f"{info['srednia_cena_zakupu']:.2f}",
+            "Wycena Brutto (szt)": f"{cena_b:.2f}"
+        })
+        
     st.dataframe(dane_do_tabeli, use_container_width=True)
 else:
     st.text("Brak wyrobów na stanie.")
